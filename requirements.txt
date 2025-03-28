@@ -3,7 +3,7 @@ streamlit
   pandas
   scikit-learn
   pickle-mixin
-  tensorflow
+  torch
   matplotlib 
   seaborn
   Streamlit

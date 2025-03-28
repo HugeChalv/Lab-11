@@ -1,7 +1,6 @@
-{python}
-############################
-# ALL-IN-ONE CODE SNIPPET
-############################
+###################################
+# MERGED CODE WITH LOSS PLOTTING
+###################################
 
 import pandas as pd
 import numpy as np
@@ -9,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import copy
+import matplotlib.pyplot as plt
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -20,24 +20,24 @@ from torch.utils.data import Dataset, DataLoader
 # 1. LOAD AND PREPARE THE DATASET
 ###################################
 
-# Replace with your own CSV path
+# Replace with your CSV filename/path
 data_path = 'lab_11_bridge_data.csv'
 df = pd.read_csv(data_path)
 
 print("Data head:\n", df.head())
 print("\nData info:\n", df.info())
 
-# Suppose 'Bridge_ID' is just an ID column (non-informative), drop it
+# Suppose 'Bridge_ID' is not informative. Drop if it exists
 if 'Bridge_ID' in df.columns:
     df.drop(columns=['Bridge_ID'], inplace=True)
 
-# Check for missing values
+# Check missing values
 print("\nMissing values per column:\n", df.isnull().sum())
 
 # Example: drop rows with any missing value
 df.dropna(inplace=True)
 
-# Separate features and target
+# Separate features & target
 target_col = 'Max_Load_Tons'
 X = df.drop(columns=[target_col])
 y = df[target_col]
@@ -46,7 +46,7 @@ y = df[target_col]
 numeric_features = ['Span_ft', 'Deck_Width_ft', 'Age_Years', 'Num_Lanes', 'Condition_Rating']
 categorical_features = ['Material']
 
-# Build a ColumnTransformer for numeric scaling + categorical one-hot
+# Build a ColumnTransformer for numeric scaling & one-hot encoding
 numeric_transformer = Pipeline(steps=[
     ('scaler', StandardScaler())
 ])
@@ -67,20 +67,20 @@ preprocessor.fit(X)
 # Transform X
 X_processed = preprocessor.transform(X)
 
-# Convert to float32 numpy arrays
+# Convert to numpy float32
 X_processed = X_processed.astype(np.float32)
 y = y.values.astype(np.float32).reshape(-1, 1)
 
-#############################################
+#########################################
 # 2. SPLIT DATA INTO TRAIN AND VALIDATION
-#############################################
+#########################################
 
 X_train, X_val, y_train, y_val = train_test_split(
     X_processed, y, test_size=0.2, random_state=42
 )
 
 ###################################
-# 3. PYTORCH DATASET AND DATALOADER
+# 3. CREATE PYTORCH DATASET & DATALOADER
 ###################################
 
 class BridgeDataset(Dataset):
@@ -94,20 +94,17 @@ class BridgeDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-# Create the Datasets
 train_dataset = BridgeDataset(X_train, y_train)
 val_dataset   = BridgeDataset(X_val, y_val)
 
-# Create DataLoaders
 batch_size = 16
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader   = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 ###################################
-# 4. DEFINE THE MODEL
+# 4. DEFINE THE MODEL ARCHITECTURE
 ###################################
 
-# Get number of input features
 input_dim = X_train.shape[1]
 
 class BridgeLoadModel(nn.Module):
@@ -120,7 +117,7 @@ class BridgeLoadModel(nn.Module):
             nn.Linear(64, 32),
             nn.ReLU(),
             nn.Dropout(p=0.2),
-            nn.Linear(32, 1)
+            nn.Linear(32, 1)  # Single output for regression
         )
         
     def forward(self, x):
@@ -128,60 +125,73 @@ class BridgeLoadModel(nn.Module):
 
 model = BridgeLoadModel(input_dim)
 
-# Loss & Optimizer (with L2 reg)
+###################################
+# 5. DEFINE LOSS AND OPTIMIZER
+###################################
+
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
-###################################
-# 5. TRAINING LOOP WITH EARLY STOP
-###################################
+##################################################
+# 6. TRAINING LOOP (WITH EARLY STOP + LOSS PLOT)
+##################################################
 
 num_epochs = 100
 patience = 10
 best_val_loss = float('inf')
 epochs_no_improve = 0
 
+# Keep track of train/val losses for plotting
+train_losses = []
+val_losses = []
+
 best_model_weights = copy.deepcopy(model.state_dict())
 
 for epoch in range(num_epochs):
     #################
-    # TRAINING
+    # TRAINING PHASE
     #################
     model.train()
-    train_loss = 0.0
+    running_train_loss = 0.0
+    
     for X_batch, y_batch in train_loader:
-        # Forward
         preds = model(X_batch)
         loss = criterion(preds, y_batch)
         
-        # Backward
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         
-        train_loss += loss.item() * X_batch.size(0)
+        running_train_loss += loss.item() * X_batch.size(0)
+        
+    epoch_train_loss = running_train_loss / len(train_loader.dataset)
     
-    train_loss /= len(train_loader.dataset)
-    
-    #################
-    # VALIDATION
-    #################
+    ###################
+    # VALIDATION PHASE
+    ###################
     model.eval()
-    val_loss = 0.0
+    running_val_loss = 0.0
+    
     with torch.no_grad():
         for X_batch, y_batch in val_loader:
             preds = model(X_batch)
             loss = criterion(preds, y_batch)
-            val_loss += loss.item() * X_batch.size(0)
+            running_val_loss += loss.item() * X_batch.size(0)
+            
+    epoch_val_loss = running_val_loss / len(val_loader.dataset)
     
-    val_loss /= len(val_loader.dataset)
+    # Store losses in lists for plotting
+    train_losses.append(epoch_train_loss)
+    val_losses.append(epoch_val_loss)
     
+    # Print progress
     print(f"Epoch [{epoch+1}/{num_epochs}] | "
-          f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+          f"Train Loss: {epoch_train_loss:.4f} | "
+          f"Val Loss: {epoch_val_loss:.4f}")
     
     # Early stopping
-    if val_loss < best_val_loss:
-        best_val_loss = val_loss
+    if epoch_val_loss < best_val_loss:
+        best_val_loss = epoch_val_loss
         best_model_weights = copy.deepcopy(model.state_dict())
         epochs_no_improve = 0
     else:
@@ -190,12 +200,23 @@ for epoch in range(num_epochs):
             print("Early stopping triggered!")
             break
 
-# Load the best model weights
+# Load the best weights
 model.load_state_dict(best_model_weights)
 
-###################################
-# 6. OPTIONAL: SAVE MODEL/PREPROCESSOR
-###################################
+##################################################
+# 7. PLOT TRAINING & VALIDATION LOSS
+##################################################
+plt.plot(train_losses, label='Train Loss')
+plt.plot(val_losses, label='Val Loss')
+plt.xlabel('Epoch')
+plt.ylabel('MSE Loss')
+plt.legend()
+plt.title('Training & Validation Loss Over Epochs')
+plt.show()
+
+##################################################
+# 8. (OPTIONAL) SAVE THE MODEL AND PREPROCESSOR
+##################################################
 # import joblib
 # joblib.dump(preprocessor, 'preprocessor.pkl')
 # torch.save(model.state_dict(), 'bridge_load_model.pth')
